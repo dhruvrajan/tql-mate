@@ -1,0 +1,23 @@
+[package]
+name = "tqlmate"
+version = "0.1.0"
+edition = "2021"
+description = "dbmate-style migration CLI for TypeDB 3.x"
+license = "MIT"
+readme = "README.md"
+
+[[bin]]
+name = "tqlmate"
+path = "src/main.rs"
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+clap = { version = "4", features = ["derive", "env"] }
+dotenvy = "0.15"
+futures = { version = "0.3", default-features = false, features = ["std"] }
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "fs"] }
+typedb-driver = "3.12.3"
+
+[dev-dependencies]
+tempfile = "3"
