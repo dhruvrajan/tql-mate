@@ -9,33 +9,86 @@ env:
   TYPEDB_URL: typedb://admin:password@127.0.0.1:1729/tqlmate_ci
 
 jobs:
-  test:
-    name: unit + integration
+  rust-test:
+    name: rust unit + integration
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
-
       - name: Setup TypeDB
         uses: typedb/setup-typedb@1.0.0
         with:
           typedb_version: "3.12.3"
           typedb_grpc_port: "1729"
-
       - name: Wait for TypeDB
         run: cargo run -q -- wait --timeout 120 -u "${TYPEDB_URL}"
-
-      - name: Unit tests
-        run: cargo test --lib --bins
-
+      - run: cargo test --lib --bins
       - name: Integration tests
         run: cargo test --test integration -- --nocapture
         env:
           TQLMATE_REQUIRE_TYPEDB: "1"
 
-  build:
-    needs: test
+  scala-test:
+    name: scala unit + integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: coursier/cache-action@v6
+      - uses: VirtusLab/scala-cli-setup@v2
+        with:
+          jvm: "temurin:21"
+          power: true
+      - name: Setup TypeDB
+        uses: typedb/setup-typedb@1.0.0
+        with:
+          typedb_version: "3.12.3"
+          typedb_grpc_port: "1729"
+      - name: Wait for TypeDB
+        working-directory: scala
+        run: scala-cli run . -- wait --timeout 120 -u "${TYPEDB_URL}"
+      - name: Tests
+        working-directory: scala
+        run: scala-cli test .
+        env:
+          TQLMATE_REQUIRE_TYPEDB: "1"
+
+  scala-native-image:
+    name: scala native-image (linux amd64)
+    needs: scala-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: coursier/cache-action@v6
+      - uses: VirtusLab/scala-cli-setup@v2
+        with:
+          jvm: "temurin:21"
+          power: true
+      - name: Setup TypeDB
+        uses: typedb/setup-typedb@1.0.0
+        with:
+          typedb_version: "3.12.3"
+          typedb_grpc_port: "1729"
+      - name: Package native-image
+        working-directory: scala
+        run: |
+          scala-cli --power package --native-image . \
+            --force -o tqlmate-scala \
+            --graalvm-args --no-fallback \
+            --graalvm-args --enable-url-protocols=http,https \
+            --graalvm-args -H:+ReportExceptionStackTraces
+          ./tqlmate-scala --help
+          ./tqlmate-scala -u "${TYPEDB_URL}" create
+          ./tqlmate-scala -u "${TYPEDB_URL}" status
+          ./tqlmate-scala -u "${TYPEDB_URL}" drop
+        env:
+          TYPEDB_URL: typedb://admin:password@127.0.0.1:1729/tqlmate_scala_ni
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tqlmate-scala-x86_64-linux
+          path: scala/tqlmate-scala
+
+  rust-build:
+    needs: rust-test
     strategy:
       fail-fast: false
       matrix:

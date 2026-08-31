@@ -1,0 +1,7 @@
+{
+  "resources":{
+  "includes":[{
+    "pattern":"\\Qlibtypedb_driver_jni-linux-x86_64.so\\E"
+  }]},
+  "bundles":[]
+}

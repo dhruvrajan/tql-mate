@@ -1,6 +1,6 @@
 # tqlmate
 
-dbmate-style migration CLI for TypeDB 3.x. Single Rust binary.
+dbmate-style migration CLI for TypeDB 3.x. Rust binary `tqlmate`; Scala port under [`scala/`](scala/) builds `tqlmate-scala`.
 
 ## Install
 
