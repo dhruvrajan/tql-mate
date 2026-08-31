@@ -33,10 +33,23 @@ fn opts(url: TypeDbUrl, migrations: PathBuf) -> Opts {
     }
 }
 
+fn require_typedb() -> bool {
+    matches!(
+        std::env::var("TQLMATE_REQUIRE_TYPEDB").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE")
+    ) || std::env::var("CI").is_ok()
+}
+
 #[tokio::test]
 async fn migrate_rollback_and_failed_up() {
     let mut url = typedb_url();
     if !server_up(&url).await {
+        if require_typedb() {
+            panic!(
+                "TypeDB required but not reachable at {} (set TYPEDB_URL)",
+                url.address()
+            );
+        }
         eprintln!("skip: TypeDB not reachable at {}", url.address());
         return;
     }

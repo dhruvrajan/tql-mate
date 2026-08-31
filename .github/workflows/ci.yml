@@ -6,24 +6,33 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  TYPEDB_URL: typedb://admin:password@127.0.0.1:1729/tqlmate_ci
 
 jobs:
   test:
+    name: unit + integration
     runs-on: ubuntu-latest
-    services:
-      typedb:
-        image: typedb/typedb:latest
-        ports:
-          - 1729:1729
     steps:
       - uses: actions/checkout@v4
+
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build
+
+      - name: Setup TypeDB
+        uses: typedb/setup-typedb@1.0.0
+        with:
+          typedb_version: "3.12.3"
+          typedb_grpc_port: "1729"
+
       - name: Wait for TypeDB
-        run: cargo run -q -- wait --timeout 90 -u 'typedb://admin:password@127.0.0.1:1729/typedb'
-      - run: cargo test
+        run: cargo run -q -- wait --timeout 120 -u "${TYPEDB_URL}"
+
+      - name: Unit tests
+        run: cargo test --lib --bins
+
+      - name: Integration tests
+        run: cargo test --test integration -- --nocapture
         env:
-          TYPEDB_URL: typedb://admin:password@127.0.0.1:1729/tqlmate_ci
+          TQLMATE_REQUIRE_TYPEDB: "1"
 
   build:
     needs: test
