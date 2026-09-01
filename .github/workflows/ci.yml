@@ -13,7 +13,7 @@ env:
 jobs:
   unit:
     name: unit
-    runs-on: depot-ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -24,7 +24,7 @@ jobs:
 
   lint:
     name: lint
-    runs-on: depot-ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -38,7 +38,7 @@ jobs:
   integration:
     name: integration
     needs: unit
-    runs-on: depot-ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -49,7 +49,7 @@ jobs:
 
   package:
     name: package (cargo publish --dry-run)
-    runs-on: depot-ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -62,9 +62,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: depot-ubuntu-24.04
+          - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-          - os: depot-ubuntu-24.04
+          - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             cross: true
           - os: macos-latest
