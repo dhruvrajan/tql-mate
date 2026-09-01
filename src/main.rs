@@ -1,70 +1,12 @@
-use std::path::PathBuf;
+//! Binary entrypoint. Clap definitions live in `tqlmate::cli` so `tests/cli.rs` can exercise argv.
+
 use std::process::ExitCode;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::Parser;
+use tqlmate::cli::{Cli, Command};
 use tqlmate::{default_migrations_dir, default_schema_file, resolve_url, Opts, Runner};
-
-#[derive(Parser, Debug)]
-#[command(
-    name = "tqlmate",
-    about = "TypeDB 3.x migration tool (dbmate-style)",
-    version
-)]
-struct Cli {
-    #[arg(short = 'u', long = "url", global = true)]
-    url: Option<String>,
-
-    #[arg(short = 'e', long = "env", global = true)]
-    env: Vec<String>,
-
-    #[arg(long = "env-file", global = true, default_value = ".env")]
-    env_file: PathBuf,
-
-    #[arg(short = 'd', long = "migrations-dir", global = true)]
-    migrations_dir: Option<PathBuf>,
-
-    #[arg(long = "schema-file", global = true)]
-    schema_file: Option<PathBuf>,
-
-    #[arg(long = "wait", global = true, value_name = "SECS")]
-    wait: Option<u64>,
-
-    #[arg(long = "strict", global = true, env = "TQLMATE_STRICT")]
-    strict: bool,
-
-    #[arg(short = 'v', long = "verbose", global = true)]
-    verbose: bool,
-
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Subcommand, Debug, PartialEq, Eq)]
-enum Command {
-    New {
-        name: String,
-    },
-    Up,
-    Create,
-    Drop,
-    Migrate,
-    #[command(visible_alias = "down")]
-    Rollback,
-    Status {
-        #[arg(long = "exit-code")]
-        exit_code: bool,
-        #[arg(long = "quiet")]
-        quiet: bool,
-    },
-    Dump,
-    Load,
-    Wait {
-        #[arg(long = "timeout", default_value = "60")]
-        timeout: u64,
-    },
-}
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -126,135 +68,8 @@ fn load_env(cli: &Cli) {
     let _ = dotenvy::from_path(&cli.env_file);
     for pair in &cli.env {
         if let Some((k, v)) = pair.split_once('=') {
-            // SAFETY: single-threaded CLI startup before any worker threads share env.
+            // SAFETY: single-threaded CLI startup before worker threads share env.
             unsafe { std::env::set_var(k, v) };
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use clap::Parser;
-
-    fn parse(argv: &[&str]) -> Cli {
-        Cli::try_parse_from(std::iter::once("tqlmate").chain(argv.iter().copied()))
-            .unwrap_or_else(|e| panic!("parse {argv:?}: {e}"))
-    }
-
-    #[test]
-    fn argv_status_flags() {
-        let cli = parse(&["status", "--exit-code", "--quiet"]);
-        assert_eq!(
-            cli.command,
-            Command::Status {
-                exit_code: true,
-                quiet: true
-            }
-        );
-    }
-
-    #[test]
-    fn argv_down_is_rollback() {
-        let cli = parse(&["down"]);
-        assert_eq!(cli.command, Command::Rollback);
-        let cli = parse(&["rollback"]);
-        assert_eq!(cli.command, Command::Rollback);
-    }
-
-    #[test]
-    fn argv_new_with_global_url() {
-        let cli = parse(&[
-            "-u",
-            "typedb://admin:password@localhost/db",
-            "new",
-            "add_person",
-        ]);
-        assert_eq!(
-            cli.url.as_deref(),
-            Some("typedb://admin:password@localhost/db")
-        );
-        assert_eq!(
-            cli.command,
-            Command::New {
-                name: "add_person".into()
-            }
-        );
-    }
-
-    #[test]
-    fn argv_wait_timeout() {
-        let cli = parse(&["wait", "--timeout", "15"]);
-        assert_eq!(cli.command, Command::Wait { timeout: 15 });
-    }
-
-    #[test]
-    fn argv_global_flags_before_subcommand() {
-        let cli = parse(&[
-            "-v",
-            "--strict",
-            "-d",
-            "migrations",
-            "--schema-file",
-            "out.tql",
-            "migrate",
-        ]);
-        assert!(cli.verbose);
-        assert!(cli.strict);
-        assert_eq!(
-            cli.migrations_dir.as_deref(),
-            Some(PathBuf::from("migrations").as_path())
-        );
-        assert_eq!(
-            cli.schema_file.as_deref(),
-            Some(PathBuf::from("out.tql").as_path())
-        );
-        assert_eq!(cli.command, Command::Migrate);
-    }
-
-    #[test]
-    fn argv_missing_command_errors() {
-        assert!(Cli::try_parse_from(["tqlmate"]).is_err());
-    }
-
-    #[test]
-    fn argv_all_subcommands() {
-        let cases: &[(&[&str], Command)] = &[
-            (&["new", "foo"], Command::New { name: "foo".into() }),
-            (&["up"], Command::Up),
-            (&["create"], Command::Create),
-            (&["drop"], Command::Drop),
-            (&["migrate"], Command::Migrate),
-            (&["rollback"], Command::Rollback),
-            (&["down"], Command::Rollback),
-            (
-                &["status"],
-                Command::Status {
-                    exit_code: false,
-                    quiet: false,
-                },
-            ),
-            (
-                &["status", "--exit-code", "--quiet"],
-                Command::Status {
-                    exit_code: true,
-                    quiet: true,
-                },
-            ),
-            (&["dump"], Command::Dump),
-            (&["load"], Command::Load),
-            (&["wait"], Command::Wait { timeout: 60 }),
-            (&["wait", "--timeout", "15"], Command::Wait { timeout: 15 }),
-        ];
-        for (argv, expect) in cases {
-            let cli = parse(argv);
-            assert_eq!(cli.command, *expect, "argv={argv:?}");
-        }
-    }
-
-    #[test]
-    fn argv_env_pairs() {
-        let cli = parse(&["-e", "FOO=bar", "-e", "BAZ=qux", "status"]);
-        assert_eq!(cli.env, vec!["FOO=bar", "BAZ=qux"]);
     }
 }

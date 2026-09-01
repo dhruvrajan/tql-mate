@@ -12,9 +12,8 @@ path = "src/main.rs"
 
 [features]
 default = ["typedb-docker"]
-# Gate for live TypeDB integration tests that start TypeDB via Docker/testcontainers.
-# `cargo test --lib` never needs this. Disable with `--no-default-features` to skip
-# the Docker-backed suite (tests are `#[ignore]`d when the feature is off).
+# Compiles `tests/typedb_docker.rs` (TypeDB via testcontainers). Offline unit
+# targets: `cargo test --no-default-features --test url --test migration --test ledger --test cli`.
 typedb-docker = []
 
 [dependencies]
