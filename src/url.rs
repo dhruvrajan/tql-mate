@@ -1,6 +1,14 @@
 use crate::{Error, Result};
 
-/// Parsed `typedb://user:pass@host:port/database[?tls=…]` connection URL.
+/// Credentials assumed when the URL omits `user:pass@`. These match TypeDB CE.
+pub const DEFAULT_USERNAME: &str = "admin";
+pub const DEFAULT_PASSWORD: &str = "password";
+
+/// Parsed `typedb://[user:pass@]host[:port]/database[?tls=…]` connection URL.
+///
+/// `user:pass@` is optional and defaults to [`DEFAULT_USERNAME`] /
+/// [`DEFAULT_PASSWORD`]; the port defaults to 1729. The database is required —
+/// `create` and `drop` act on whatever it names, so it is never guessed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeDbUrl {
     pub username: String,
@@ -13,10 +21,18 @@ pub struct TypeDbUrl {
 
 impl TypeDbUrl {
     pub fn parse(raw: &str) -> Result<Self> {
-        let rest = raw.strip_prefix("typedb://").ok_or(Error::UrlScheme)?;
+        let rest = raw
+            .strip_prefix("typedb://")
+            .ok_or_else(|| Error::UrlScheme(raw.to_string()))?;
 
-        let (auth, after_auth) = rest.split_once('@').ok_or(Error::UrlAuthHost)?;
-        let (username, password) = auth.split_once(':').ok_or(Error::UrlAuthPair)?;
+        // Split on the last '@' so a literal '@' in the password still parses.
+        let (username, password, after_auth) = match rest.rsplit_once('@') {
+            Some((auth, after)) => {
+                let (u, p) = auth.split_once(':').ok_or(Error::UrlAuthPair)?;
+                (u, p, after)
+            }
+            None => (DEFAULT_USERNAME, DEFAULT_PASSWORD, rest),
+        };
 
         let (hostport, path_query) = match after_auth.split_once('/') {
             Some((hp, pq)) => (hp, pq),

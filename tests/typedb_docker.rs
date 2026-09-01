@@ -77,7 +77,7 @@ async fn shared_typedb() -> &'static SharedTypeDb {
         let probe = TypeDbUrl::parse(&format!("typedb://admin:password@{host}:{port}/typedb"))
             .expect("probe url");
         let mut waiter = Runner::new(Opts {
-            url: probe,
+            url: Some(probe),
             migrations_dir: PathBuf::from("."),
             schema_file: PathBuf::from("schema.tql"),
             strict: false,
@@ -112,7 +112,7 @@ fn unique_db(prefix: &str) -> String {
 
 fn opts(url: TypeDbUrl, migrations: PathBuf, schema: PathBuf) -> Opts {
     Opts {
-        url,
+        url: Some(url),
         migrations_dir: migrations,
         schema_file: schema,
         strict: false,

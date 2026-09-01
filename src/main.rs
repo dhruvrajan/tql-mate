@@ -23,8 +23,14 @@ async fn run() -> Result<ExitCode> {
     let cli = Cli::parse();
     load_env(&cli);
 
+    // `new` only writes a file, so it must not demand a usable connection URL.
+    let url = match cli.command {
+        Command::New { .. } => None,
+        _ => Some(resolve_url(cli.url.as_deref()).context("invalid TypeDB URL")?),
+    };
+
     let opts = Opts {
-        url: resolve_url(cli.url.as_deref()).context("invalid TypeDB URL")?,
+        url,
         migrations_dir: cli.migrations_dir.unwrap_or_else(default_migrations_dir),
         schema_file: cli.schema_file.unwrap_or_else(default_schema_file),
         strict: cli.strict,

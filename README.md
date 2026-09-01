@@ -21,10 +21,15 @@ Requires a TypeDB 3.x server. Default credentials match TypeDB CE (`admin` / `pa
 ## URL
 
 ```
-typedb://user:pass@host:port/database
+typedb://[user:pass@]host[:port]/database
 typedb://admin:password@localhost:1729/typedb          # default
+typedb://localhost:1729/mydb                           # user:pass defaults to admin/password
+typedb://localhost/mydb                                # port defaults to 1729
 typedb://admin:password@localhost:1729/typedb?tls=true
 ```
+
+The database is always required — `create` and `drop` act on whatever it names,
+so it is never guessed. `new` writes a file locally and needs no URL at all.
 
 Set via `--url` / `-u`, or `TYPEDB_URL` (alias `DATABASE_URL`). Optional `.env` via `--env-file`.
 

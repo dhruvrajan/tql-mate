@@ -18,7 +18,7 @@ pub use migration::{
 pub use runner::{
     default_migrations_dir, default_schema_file, resolve_url, resolve_url_from, Opts, Runner,
 };
-pub use url::TypeDbUrl;
+pub use url::{TypeDbUrl, DEFAULT_PASSWORD, DEFAULT_USERNAME};
 
 /// Library error type. The CLI maps this into `anyhow::Error`.
 #[derive(Debug, thiserror::Error)]
@@ -26,17 +26,17 @@ pub enum Error {
     #[error("{0}")]
     Message(String),
 
-    #[error("URL must start with typedb://")]
-    UrlScheme,
+    #[error("URL must start with typedb://, e.g. typedb://localhost:1729/mydb (got {0:?})")]
+    UrlScheme(String),
 
-    #[error("URL missing user:pass@host")]
-    UrlAuthHost,
-
-    #[error("URL auth must be user:pass")]
+    #[error("URL credentials must be user:pass, e.g. typedb://admin:password@localhost:1729/mydb")]
     UrlAuthPair,
 
-    #[error("URL must include /database")]
+    #[error("URL must name a database, e.g. typedb://localhost:1729/mydb")]
     UrlDatabase,
+
+    #[error("no TypeDB URL configured")]
+    UrlMissing,
 
     #[error("invalid port: {0}")]
     UrlPort(String),

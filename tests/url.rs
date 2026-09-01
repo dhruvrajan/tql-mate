@@ -39,6 +39,41 @@ fn table_driven_parse() {
             },
         ),
         (
+            // Credentials omitted: TypeDB CE defaults fill in.
+            "typedb://localhost:1729/mydb",
+            TypeDbUrl {
+                username: "admin".into(),
+                password: "password".into(),
+                host: "localhost".into(),
+                port: 1729,
+                database: "mydb".into(),
+                tls: false,
+            },
+        ),
+        (
+            "typedb://localhost/mydb?tls=true",
+            TypeDbUrl {
+                username: "admin".into(),
+                password: "password".into(),
+                host: "localhost".into(),
+                port: 1729,
+                database: "mydb".into(),
+                tls: true,
+            },
+        ),
+        (
+            // A literal '@' in the password: split on the last one.
+            "typedb://u:p@ss@host/db",
+            TypeDbUrl {
+                username: "u".into(),
+                password: "p@ss".into(),
+                host: "host".into(),
+                port: 1729,
+                database: "db".into(),
+                tls: false,
+            },
+        ),
+        (
             "typedb://u:p+word@127.0.0.1:1729/x?tls=1",
             TypeDbUrl {
                 username: "u".into(),
@@ -89,9 +124,9 @@ fn table_driven_parse() {
 
     let err_cases = [
         ("http://admin:x@localhost/db", "UrlScheme"),
-        ("typedb://localhost/db", "UrlAuthHost"),
         ("typedb://admin@localhost/db", "UrlAuthPair"),
         ("typedb://admin:pass@localhost", "UrlDatabase"),
+        ("typedb://localhost:1729", "UrlDatabase"),
         ("typedb://admin:pass@localhost/", "UrlDatabase"),
         ("typedb://admin:pass@localhost:xyz/db", "UrlPort"),
     ];

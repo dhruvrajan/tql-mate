@@ -13,7 +13,8 @@ use crate::{Error, Result};
 
 #[derive(Debug, Clone)]
 pub struct Opts {
-    pub url: TypeDbUrl,
+    /// `None` for commands that never connect (`new`).
+    pub url: Option<TypeDbUrl>,
     pub migrations_dir: PathBuf,
     pub schema_file: PathBuf,
     pub strict: bool,
@@ -31,12 +32,20 @@ impl Runner {
         Self { opts, driver: None }
     }
 
+    fn url(&self) -> Result<&TypeDbUrl> {
+        self.opts.url.as_ref().ok_or(Error::UrlMissing)
+    }
+
+    fn database(&self) -> Result<String> {
+        Ok(self.url()?.database.clone())
+    }
+
     async fn connect(&mut self) -> Result<&TypeDBDriver> {
         if self.driver.is_none() {
             if let Some(timeout) = self.opts.wait_timeout {
-                wait_for_server(&self.opts.url, timeout, self.opts.verbose).await?;
+                wait_for_server(self.url()?, timeout, self.opts.verbose).await?;
             }
-            self.driver = Some(open_driver(&self.opts.url).await?);
+            self.driver = Some(open_driver(self.url()?).await?);
         }
         self.driver
             .as_ref()
@@ -44,7 +53,7 @@ impl Runner {
     }
 
     pub async fn create(&mut self) -> Result<()> {
-        let name = self.opts.url.database.clone();
+        let name = self.database()?;
         let verbose = self.opts.verbose;
         let driver = self.connect().await?;
         if driver.databases().contains(name.clone()).await? {
@@ -59,7 +68,7 @@ impl Runner {
     }
 
     pub async fn drop(&mut self) -> Result<()> {
-        let name = self.opts.url.database.clone();
+        let name = self.database()?;
         let verbose = self.opts.verbose;
         let driver = self.connect().await?;
         if !driver.databases().contains(name.clone()).await? {
@@ -83,7 +92,7 @@ impl Runner {
     }
 
     pub async fn migrate(&mut self) -> Result<()> {
-        let db = self.opts.url.database.clone();
+        let db = self.database()?;
         let dir = self.opts.migrations_dir.clone();
         let strict = self.opts.strict;
         let verbose = self.opts.verbose;
@@ -116,7 +125,7 @@ impl Runner {
     }
 
     pub async fn rollback(&mut self) -> Result<()> {
-        let db = self.opts.url.database.clone();
+        let db = self.database()?;
         let dir = self.opts.migrations_dir.clone();
         let verbose = self.opts.verbose;
 
@@ -146,7 +155,7 @@ impl Runner {
     }
 
     pub async fn status(&mut self, quiet: bool) -> Result<bool> {
-        let db = self.opts.url.database.clone();
+        let db = self.database()?;
         let dir = self.opts.migrations_dir.clone();
         let strict = self.opts.strict;
 
@@ -180,7 +189,7 @@ impl Runner {
     }
 
     pub async fn dump(&mut self) -> Result<()> {
-        let db_name = self.opts.url.database.clone();
+        let db_name = self.database()?;
         let schema_file = self.opts.schema_file.clone();
         let dir = self.opts.migrations_dir.clone();
 
@@ -205,7 +214,7 @@ impl Runner {
 
     pub async fn load(&mut self) -> Result<()> {
         let schema_file = self.opts.schema_file.clone();
-        let db = self.opts.url.database.clone();
+        let db = self.database()?;
         let text = std::fs::read_to_string(&schema_file)?;
         let body = strip_dump_header(&text);
         if body.trim().is_empty() {
@@ -222,7 +231,7 @@ impl Runner {
     }
 
     pub async fn wait(&mut self, timeout: Duration) -> Result<()> {
-        wait_for_server(&self.opts.url, timeout, self.opts.verbose).await
+        wait_for_server(self.url()?, timeout, self.opts.verbose).await
     }
 
     pub async fn up(&mut self) -> Result<()> {
