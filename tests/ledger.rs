@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 
 use tqlmate::{
-    bootstrap_schema, dump_header, record_delete, record_insert, strip_dump_header, ATTR_APPLIED_AT,
-    ATTR_VERSION, ENTITY, MigrationFile, Version,
+    bootstrap_schema, dump_header, record_delete, record_insert, strip_dump_header, MigrationFile,
+    Version, ATTR_APPLIED_AT, ATTR_VERSION, ENTITY,
 };
 
 #[test]

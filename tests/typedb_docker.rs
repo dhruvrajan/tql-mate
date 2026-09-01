@@ -74,10 +74,8 @@ async fn shared_typedb() -> &'static SharedTypeDb {
             .await
             .unwrap_or_else(|e| panic!("typedb mapped port: {e}"));
 
-        let probe = TypeDbUrl::parse(&format!(
-            "typedb://admin:password@{host}:{port}/typedb"
-        ))
-        .expect("probe url");
+        let probe = TypeDbUrl::parse(&format!("typedb://admin:password@{host}:{port}/typedb"))
+            .expect("probe url");
         let mut waiter = Runner::new(Opts {
             url: probe,
             migrations_dir: PathBuf::from("."),

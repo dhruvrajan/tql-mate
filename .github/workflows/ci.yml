@@ -2,32 +2,50 @@ name: ci
 
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
   TYPEDB_URL: typedb://admin:password@127.0.0.1:1729/tqlmate_ci
 
 jobs:
-  rust-unit:
-    name: rust unit (no Docker)
-    runs-on: ubuntu-latest
+  unit:
+    name: unit
+    runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Unit tests under tests/ (no TypeDB / no Docker)
+      - name: Offline unit tests (no TypeDB / no Docker)
         run: >
           cargo test --no-default-features
           --test url --test migration --test ledger --test cli
 
-  rust-typedb-docker:
-    name: rust typedb_docker integration
-    runs-on: ubuntu-latest
+  lint:
+    name: lint
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --all-targets --features typedb-docker -- -D warnings
+
+  integration:
+    name: integration
+    needs: unit
+    runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: TypeDB via testcontainers
-        run: cargo test --features typedb-docker --test typedb_docker -- --nocapture --test-threads=1
+        run: >
+          cargo test --features typedb-docker --test typedb_docker
+          -- --nocapture --test-threads=1
 
   scala-test:
     name: scala unit + integration
@@ -89,14 +107,14 @@ jobs:
           path: scala/tqlmate-scala
 
   rust-build:
-    needs: rust-unit
+    needs: unit
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: depot-ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-          - os: ubuntu-latest
+          - os: depot-ubuntu-24.04
             target: aarch64-unknown-linux-gnu
             cross: true
           - os: macos-latest
