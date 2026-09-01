@@ -5,8 +5,3 @@
 /db/
 *.typedb
 Cargo.lock.bak
-scala/.scala-build/
-scala/.bsp/
-scala/tqlmate-scala
-scala/tqlmate-scala.jar
-scala/*.jar
