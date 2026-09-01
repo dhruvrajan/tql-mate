@@ -1,5 +1,6 @@
 //! Library surface for the `tqlmate` CLI: URL parsing, migration files, ledger TypeQL, and runner.
 
+pub mod cli;
 mod ledger;
 mod migration;
 mod runner;
@@ -11,7 +12,8 @@ pub use ledger::{
 };
 pub use migration::{
     check_strict_order, list_migration_files, migration_template, new_migration_path,
-    parse_migration, parse_version_name, status_rows, MigrationFile, MigrationStatus, Version,
+    parse_migration, parse_migration_body, parse_version_name, slugify, status_rows, MigrationFile,
+    MigrationStatus, Version,
 };
 pub use runner::{
     default_migrations_dir, default_schema_file, resolve_url, resolve_url_from, Opts, Runner,
