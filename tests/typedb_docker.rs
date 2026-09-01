@@ -1,10 +1,10 @@
-//! Live TypeDB integration tests.
+//! TypeDB Docker integration suite (`cargo test --test typedb_docker`).
 //!
-//! With the default `typedb-docker` feature these tests **start TypeDB in Docker** via
-//! testcontainers and drive `tqlmate::Runner` against it. They do **not** skip when a
-//! server is unreachable: if Docker cannot start TypeDB, the tests panic/fail.
+//! Starts TypeDB 3.x via testcontainers and drives `tqlmate::Runner` against it.
+//! Panics if Docker cannot start TypeDB (no silent skip).
 //!
-//! Unit coverage lives under `src/**` (`cargo test --lib`) and never needs Docker.
+//! Pure unit tests live only under `src/**` (`cargo test --lib --bins`) and never
+//! import testcontainers or open a TypeDB connection.
 
 #![cfg(feature = "typedb-docker")]
 
@@ -50,8 +50,8 @@ async fn shared_typedb() -> &'static SharedTypeDb {
             .unwrap_or(true)
         {
             panic!(
-                "typedb-docker integration tests require Docker, but `docker info` failed. \
-                 Install/start Docker, or run `cargo test --lib` / `cargo test --no-default-features`."
+                "typedb_docker tests require Docker, but `docker info` failed. \
+                 Install/start Docker, or run unit tests only: `cargo test --lib --bins`."
             );
         }
 

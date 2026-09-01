@@ -74,5 +74,5 @@ Each up/down runs in one **SCHEMA** transaction together with the ledger write (
 
 - `dump` uses `Database::schema()` (TypeQL `define` text) and prepends applied versions as comments.
 - `load` strips those header comments and runs the remainder as one schema query. Prefer `migrate` for incremental changes; `load` is for bootstrapping from a dump.
-- Unit tests (`cargo test --lib --bins`) never need TypeDB or Docker.
-- Integration tests (`cargo test --test integration`) start TypeDB 3.x in Docker via testcontainers (feature `typedb-docker`, on by default). They fail loudly if Docker is unavailable — they do not skip. Use `--no-default-features` to ignore them.
+- Unit tests live under `src/**` (`cargo test --lib --bins`) and never need TypeDB or Docker.
+- Docker/TypeDB integration lives only in `tests/typedb_docker.rs` (`cargo test --test typedb_docker`, feature `typedb-docker`). It fails loudly if Docker is unavailable — it does not skip.
