@@ -15,8 +15,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Unit tests in src/** only
-        run: cargo test --lib --bins --no-default-features
+      - name: Unit tests under tests/ (no TypeDB / no Docker)
+        run: >
+          cargo test --no-default-features
+          --test url --test migration --test ledger --test cli
 
   rust-typedb-docker:
     name: rust typedb_docker integration
