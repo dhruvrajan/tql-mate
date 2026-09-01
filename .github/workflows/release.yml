@@ -18,6 +18,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Tag must match the Cargo.toml version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME publishes Cargo.toml version" \
+                 "$version. Bump Cargo.toml (and Cargo.lock) before tagging."
+            exit 1
+          fi
+      - name: Cargo.lock must be complete
+        run: cargo metadata --locked --format-version 1 >/dev/null
       - run: >
           cargo test --no-default-features
           --test url --test migration --test ledger --test cli
