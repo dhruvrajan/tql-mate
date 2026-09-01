@@ -309,6 +309,17 @@ mod tests {
                 "define entity x;",
                 "",
             ),
+
+            (
+                "-- migrate:up\r\ndefine entity x;\r\n-- migrate:down\r\nundefine entity x;\r\n",
+                "define entity x;",
+                "undefine entity x;",
+            ),
+            (
+                "junk before\n-- migrate:up\ndefine entity x;\nextra still in up\n-- migrate:down\nundefine entity x;\n",
+                "define entity x;\nextra still in up",
+                "undefine entity x;",
+            ),
         ];
         for (text, eu, ed) in ok {
             let (u, d) = split_up_down(text).unwrap_or_else(|e| panic!("{text:?}: {e}"));
@@ -393,6 +404,20 @@ mod tests {
         assert!(list_migration_files(&dir.path().join("missing"))
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn parser_handles_crlf_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("20240101120000_crlf.tql");
+        std::fs::write(
+            &path,
+            "-- migrate:up\r\ndefine entity crlf;\r\n\r\n-- migrate:down\r\nundefine entity crlf;\r\n",
+        )
+        .unwrap();
+        let m = parse_migration(&path).unwrap();
+        assert_eq!(m.up, "define entity crlf;");
+        assert_eq!(m.down, "undefine entity crlf;");
     }
 
     #[test]

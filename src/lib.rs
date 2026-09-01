@@ -6,14 +6,16 @@ mod runner;
 mod url;
 
 pub use ledger::{
-    dump_header, record_delete, record_insert, strip_dump_header, ATTR_APPLIED_AT, ATTR_VERSION,
-    ENTITY,
+    bootstrap_schema, dump_header, record_delete, record_insert, strip_dump_header,
+    ATTR_APPLIED_AT, ATTR_VERSION, ENTITY,
 };
 pub use migration::{
     check_strict_order, list_migration_files, migration_template, new_migration_path,
     parse_migration, parse_version_name, status_rows, MigrationFile, MigrationStatus, Version,
 };
-pub use runner::{default_migrations_dir, default_schema_file, resolve_url, Opts, Runner};
+pub use runner::{
+    default_migrations_dir, default_schema_file, resolve_url, resolve_url_from, Opts, Runner,
+};
 pub use url::TypeDbUrl;
 
 /// Library error type. The CLI maps this into `anyhow::Error`.

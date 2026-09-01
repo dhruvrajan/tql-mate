@@ -17,11 +17,16 @@ const ENSURE_SCHEMA: &str = concat!(
     "    owns _tqlmate_applied_at @card(1);\n",
 );
 
+/// Bootstrap TypeQL that creates the `_tqlmate_*` ledger types (pure string; no network).
+pub fn bootstrap_schema() -> &'static str {
+    ENSURE_SCHEMA
+}
+
 pub async fn ensure(driver: &TypeDBDriver, database: &str) -> Result<()> {
     if applied_versions(driver, database).await.is_ok() {
         return Ok(());
     }
-    schema_queries(driver, database, &[ENSURE_SCHEMA]).await
+    schema_queries(driver, database, &[bootstrap_schema()]).await
 }
 
 pub async fn applied_versions(driver: &TypeDBDriver, database: &str) -> Result<Vec<Version>> {
@@ -130,11 +135,13 @@ mod tests {
     }
 
     #[test]
-    fn ensure_schema_defines_ledger_types() {
-        assert!(ENSURE_SCHEMA.contains(ENTITY));
-        assert!(ENSURE_SCHEMA.contains(ATTR_VERSION));
-        assert!(ENSURE_SCHEMA.contains(ATTR_APPLIED_AT));
-        assert!(ENSURE_SCHEMA.contains("@card(1)"));
+    fn bootstrap_schema_defines_ledger_types() {
+        let schema = bootstrap_schema();
+        assert!(schema.contains(ENTITY));
+        assert!(schema.contains(ATTR_VERSION));
+        assert!(schema.contains(ATTR_APPLIED_AT));
+        assert!(schema.contains("@card(1)"));
+        assert!(schema.trim_start().starts_with("define"));
     }
 
     #[test]
@@ -162,5 +169,20 @@ mod tests {
         assert_eq!(strip_dump_header(text), "define\n  entity x;");
         assert_eq!(strip_dump_header("define entity y;"), "define entity y;");
         assert_eq!(strip_dump_header("-- only comments\n\n"), "");
+    }
+
+    #[test]
+    fn dump_header_round_trip_with_strip() {
+        let files = [MigrationFile {
+            version: Version::new("20240101000000"),
+            name: "person".into(),
+            path: PathBuf::from("20240101000000_person.tql"),
+            up: String::new(),
+            down: String::new(),
+        }];
+        let header = dump_header(&[Version::new("20240101000000")], &files);
+        let full = format!("{header}define\n  entity person;\n");
+        assert_eq!(strip_dump_header(&full), "define\n  entity person;");
+        assert!(bootstrap_schema().contains(ENTITY));
     }
 }

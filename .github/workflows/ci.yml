@@ -10,23 +10,15 @@ env:
 
 jobs:
   rust-test:
-    name: rust unit + integration
+    name: rust unit + docker integration
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Setup TypeDB
-        uses: typedb/setup-typedb@1.0.0
-        with:
-          typedb_version: "3.12.3"
-          typedb_grpc_port: "1729"
-      - name: Wait for TypeDB
-        run: cargo run -q -- wait --timeout 120 -u "${TYPEDB_URL}"
-      - run: cargo test --lib --bins
-      - name: Integration tests
-        run: cargo test --test integration -- --nocapture
-        env:
-          TQLMATE_REQUIRE_TYPEDB: "1"
+      - name: Unit tests (no TypeDB / no Docker)
+        run: cargo test --lib --bins
+      - name: Integration tests (TypeDB via testcontainers)
+        run: cargo test --features typedb-docker --test integration -- --nocapture --test-threads=1
 
   scala-test:
     name: scala unit + integration

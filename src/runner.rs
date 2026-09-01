@@ -301,13 +301,26 @@ async fn apply_down(
     schema_queries(driver, database, &[down, delete.as_str()]).await
 }
 
-pub fn resolve_url(cli_url: Option<&str>) -> Result<TypeDbUrl> {
+/// Resolve a connection URL from CLI / env sources (pure; no process env reads).
+///
+/// Precedence: `cli_url` → `TYPEDB_URL` → `DATABASE_URL` → built-in default.
+pub fn resolve_url_from(
+    cli_url: Option<&str>,
+    typedb_url: Option<&str>,
+    database_url: Option<&str>,
+) -> Result<TypeDbUrl> {
     let raw = cli_url
         .map(str::to_string)
-        .or_else(|| std::env::var("TYPEDB_URL").ok())
-        .or_else(|| std::env::var("DATABASE_URL").ok())
+        .or_else(|| typedb_url.map(str::to_string))
+        .or_else(|| database_url.map(str::to_string))
         .unwrap_or_else(|| "typedb://admin:password@localhost:1729/typedb".into());
     TypeDbUrl::parse(&raw)
+}
+
+pub fn resolve_url(cli_url: Option<&str>) -> Result<TypeDbUrl> {
+    let typedb = std::env::var("TYPEDB_URL").ok();
+    let database = std::env::var("DATABASE_URL").ok();
+    resolve_url_from(cli_url, typedb.as_deref(), database.as_deref())
 }
 
 pub fn default_migrations_dir() -> PathBuf {
@@ -323,6 +336,38 @@ pub fn default_schema_file() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_url_precedence_table() {
+        let cases = [
+            (
+                Some("typedb://a:b@h:1/cli"),
+                Some("typedb://a:b@h:1/typedb_env"),
+                Some("typedb://a:b@h:1/database_env"),
+                "cli",
+            ),
+            (
+                None,
+                Some("typedb://a:b@h:1/typedb_env"),
+                Some("typedb://a:b@h:1/database_env"),
+                "typedb_env",
+            ),
+            (
+                None,
+                None,
+                Some("typedb://a:b@h:1/database_env"),
+                "database_env",
+            ),
+            (None, None, None, "typedb"),
+        ];
+        for (cli, typedb, database, expect_db) in cases {
+            let u = resolve_url_from(cli, typedb, database).unwrap();
+            assert_eq!(
+                u.database, expect_db,
+                "cli={cli:?} typedb={typedb:?} database={database:?}"
+            );
+        }
+    }
 
     #[test]
     fn resolve_url_prefers_argument() {
