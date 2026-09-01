@@ -9,23 +9,16 @@ env:
   TYPEDB_URL: typedb://admin:password@127.0.0.1:1729/tqlmate_ci
 
 jobs:
-  rust-unit:
-    name: rust unit (no Docker)
+  rust-test:
+    name: rust unit + docker integration
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Unit tests in src/** only
-        run: cargo test --lib --bins --no-default-features
-
-  rust-typedb-docker:
-    name: rust typedb_docker integration
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: TypeDB via testcontainers
-        run: cargo test --features typedb-docker --test typedb_docker -- --nocapture --test-threads=1
+      - name: Unit tests (no TypeDB / no Docker)
+        run: cargo test --lib --bins
+      - name: Integration tests (TypeDB via testcontainers)
+        run: cargo test --features typedb-docker --test integration -- --nocapture --test-threads=1
 
   scala-test:
     name: scala unit + integration
@@ -87,7 +80,7 @@ jobs:
           path: scala/tqlmate-scala
 
   rust-build:
-    needs: rust-unit
+    needs: rust-test
     strategy:
       fail-fast: false
       matrix:
