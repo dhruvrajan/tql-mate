@@ -10,6 +10,13 @@ readme = "README.md"
 name = "tqlmate"
 path = "src/main.rs"
 
+[features]
+default = ["typedb-docker"]
+# Gate for live TypeDB integration tests that start TypeDB via Docker/testcontainers.
+# `cargo test --lib` never needs this. Disable with `--no-default-features` to skip
+# the Docker-backed suite (tests are `#[ignore]`d when the feature is off).
+typedb-docker = []
+
 [dependencies]
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
@@ -17,8 +24,9 @@ clap = { version = "4", features = ["derive", "env"] }
 dotenvy = "0.15"
 futures = { version = "0.3", default-features = false, features = ["std"] }
 thiserror = "2"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "fs"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "fs", "sync"] }
 typedb-driver = "3.12.3"
 
 [dev-dependencies]
 tempfile = "3"
+testcontainers = "0.23"

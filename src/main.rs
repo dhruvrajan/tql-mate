@@ -218,6 +218,41 @@ mod tests {
     }
 
     #[test]
+    fn argv_all_subcommands() {
+        let cases: &[(&[&str], Command)] = &[
+            (&["new", "foo"], Command::New { name: "foo".into() }),
+            (&["up"], Command::Up),
+            (&["create"], Command::Create),
+            (&["drop"], Command::Drop),
+            (&["migrate"], Command::Migrate),
+            (&["rollback"], Command::Rollback),
+            (&["down"], Command::Rollback),
+            (
+                &["status"],
+                Command::Status {
+                    exit_code: false,
+                    quiet: false,
+                },
+            ),
+            (
+                &["status", "--exit-code", "--quiet"],
+                Command::Status {
+                    exit_code: true,
+                    quiet: true,
+                },
+            ),
+            (&["dump"], Command::Dump),
+            (&["load"], Command::Load),
+            (&["wait"], Command::Wait { timeout: 60 }),
+            (&["wait", "--timeout", "15"], Command::Wait { timeout: 15 }),
+        ];
+        for (argv, expect) in cases {
+            let cli = parse(argv);
+            assert_eq!(cli.command, *expect, "argv={argv:?}");
+        }
+    }
+
+    #[test]
     fn argv_env_pairs() {
         let cli = parse(&["-e", "FOO=bar", "-e", "BAZ=qux", "status"]);
         assert_eq!(cli.env, vec!["FOO=bar", "BAZ=qux"]);

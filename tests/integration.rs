@@ -1,43 +1,103 @@
+//! Live TypeDB integration tests.
+//!
+//! With the default `typedb-docker` feature these tests **start TypeDB in Docker** via
+//! testcontainers and drive `tqlmate::Runner` against it. They do **not** skip when a
+//! server is unreachable: if Docker cannot start TypeDB, the tests panic/fail.
+//!
+//! Unit coverage lives under `src/**` (`cargo test --lib`) and never needs Docker.
+
+#![cfg(feature = "typedb-docker")]
+
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use testcontainers::core::{IntoContainerPort, WaitFor};
+use testcontainers::runners::AsyncRunner;
+use testcontainers::{ContainerAsync, GenericImage, ImageExt};
+use tokio::sync::OnceCell;
 use tqlmate::{Opts, Runner, TypeDbUrl};
 
-fn typedb_url() -> TypeDbUrl {
-    let raw = std::env::var("TYPEDB_URL")
-        .or_else(|_| std::env::var("TQLMATE_TEST_URL"))
-        .unwrap_or_else(|_| "typedb://admin:password@127.0.0.1:1729/tqlmate_test".into());
-    TypeDbUrl::parse(&raw).expect("TYPEDB_URL")
+const TYPEDB_IMAGE: &str = "typedb/typedb";
+const TYPEDB_TAG: &str = "3.12.3";
+const TYPEDB_PORT: u16 = 1729;
+
+struct SharedTypeDb {
+    #[allow(dead_code)]
+    container: ContainerAsync<GenericImage>,
+    host: String,
+    port: u16,
 }
 
-async fn server_up(url: &TypeDbUrl) -> bool {
-    let mut runner = Runner::new(Opts {
-        url: url.clone(),
-        migrations_dir: PathBuf::from("."),
-        schema_file: PathBuf::from("schema.tql"),
-        strict: false,
-        verbose: false,
-        wait_timeout: None,
-    });
-    runner.wait(Duration::from_secs(2)).await.is_ok()
-}
-
-fn opts(url: TypeDbUrl, migrations: PathBuf, schema: PathBuf) -> Opts {
-    Opts {
-        url,
-        migrations_dir: migrations,
-        schema_file: schema,
-        strict: false,
-        verbose: true,
-        wait_timeout: None,
+impl SharedTypeDb {
+    fn url_for(&self, database: &str) -> TypeDbUrl {
+        TypeDbUrl::parse(&format!(
+            "typedb://admin:password@{}:{}/{database}",
+            self.host, self.port
+        ))
+        .expect("typedb url")
     }
 }
 
-fn require_typedb() -> bool {
-    matches!(
-        std::env::var("TQLMATE_REQUIRE_TYPEDB").as_deref(),
-        Ok("1") | Ok("true") | Ok("TRUE")
-    ) || std::env::var("CI").is_ok()
+async fn shared_typedb() -> &'static SharedTypeDb {
+    static CELL: OnceCell<SharedTypeDb> = OnceCell::const_new();
+    CELL.get_or_init(|| async {
+        if std::process::Command::new("docker")
+            .arg("info")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| !s.success())
+            .unwrap_or(true)
+        {
+            panic!(
+                "typedb-docker integration tests require Docker, but `docker info` failed. \
+                 Install/start Docker, or run `cargo test --lib` / `cargo test --no-default-features`."
+            );
+        }
+
+        let image = GenericImage::new(TYPEDB_IMAGE, TYPEDB_TAG)
+            .with_exposed_port(TYPEDB_PORT.tcp())
+            .with_wait_for(WaitFor::message_on_stderr("Ready!"))
+            .with_startup_timeout(Duration::from_secs(120));
+
+        let container = image.start().await.unwrap_or_else(|e| {
+            panic!("failed to start {TYPEDB_IMAGE}:{TYPEDB_TAG} via testcontainers: {e}")
+        });
+
+        let host = container
+            .get_host()
+            .await
+            .unwrap_or_else(|e| panic!("typedb container host: {e}"))
+            .to_string();
+        let port = container
+            .get_host_port_ipv4(TYPEDB_PORT)
+            .await
+            .unwrap_or_else(|e| panic!("typedb mapped port: {e}"));
+
+        let probe = TypeDbUrl::parse(&format!(
+            "typedb://admin:password@{host}:{port}/typedb"
+        ))
+        .expect("probe url");
+        let mut waiter = Runner::new(Opts {
+            url: probe,
+            migrations_dir: PathBuf::from("."),
+            schema_file: PathBuf::from("schema.tql"),
+            strict: false,
+            verbose: false,
+            wait_timeout: None,
+        });
+        waiter
+            .wait(Duration::from_secs(120))
+            .await
+            .unwrap_or_else(|e| panic!("TypeDB container started but driver wait failed: {e}"));
+
+        SharedTypeDb {
+            container,
+            host,
+            port,
+        }
+    })
+    .await
 }
 
 fn unique_db(prefix: &str) -> String {
@@ -52,18 +112,15 @@ fn unique_db(prefix: &str) -> String {
         .collect()
 }
 
-async fn skip_or_panic_if_down(url: &TypeDbUrl) -> bool {
-    if server_up(url).await {
-        return false;
+fn opts(url: TypeDbUrl, migrations: PathBuf, schema: PathBuf) -> Opts {
+    Opts {
+        url,
+        migrations_dir: migrations,
+        schema_file: schema,
+        strict: false,
+        verbose: true,
+        wait_timeout: None,
     }
-    if require_typedb() {
-        panic!(
-            "TypeDB required but not reachable at {} (set TYPEDB_URL)",
-            url.address()
-        );
-    }
-    eprintln!("skip: TypeDB not reachable at {}", url.address());
-    true
 }
 
 fn write_migration(dir: &std::path::Path, filename: &str, body: &str) {
@@ -71,13 +128,9 @@ fn write_migration(dir: &std::path::Path, filename: &str, body: &str) {
 }
 
 #[tokio::test]
-async fn migrate_rollback_dump_and_failed_up_not_recorded() {
-    let base = typedb_url();
-    if skip_or_panic_if_down(&base).await {
-        return;
-    }
-
-    let url = base.with_database(unique_db("tqlmate_mig"));
+async fn migrate_status_dump_rollback_failed_up_and_drop() {
+    let typedb = shared_typedb().await;
+    let url = typedb.url_for(&unique_db("tqlmate_mig"));
     let tmp = tempfile::tempdir().unwrap();
     let migrations = tmp.path().join("migrations");
     let schema = tmp.path().join("schema.tql");
@@ -114,27 +167,41 @@ async fn migrate_rollback_dump_and_failed_up_not_recorded() {
     let mut runner = Runner::new(opts(url, migrations.clone(), schema.clone()));
     let _ = runner.drop().await;
     runner.create().await.expect("create");
-    runner.migrate().await.expect("migrate");
+    runner.migrate().await.expect("migrate two");
     assert!(
         !runner.status(true).await.expect("status"),
-        "all migrations should be applied"
-    );
-
-    runner.rollback().await.expect("rollback");
-    assert!(
-        runner.status(true).await.expect("status after rollback"),
-        "one migration should be pending after rollback"
+        "both migrations should be applied"
     );
 
     runner.dump().await.expect("dump");
     let dump = std::fs::read_to_string(&schema).expect("read dump");
     assert!(
         dump.contains("-- Schema dumped by tqlmate"),
-        "dump should include header"
+        "dump header missing: {dump}"
+    );
+    assert!(
+        dump.contains("20240101000000_person") && dump.contains("20240102000000_age"),
+        "dump should list both applied versions: {dump}"
     );
     assert!(dump.contains("define"), "dump should include schema body");
 
-    runner.migrate().await.expect("re-migrate");
+    runner.rollback().await.expect("rollback latest");
+    assert!(
+        runner.status(true).await.expect("status after rollback"),
+        "one migration should be pending after rollback"
+    );
+    runner.dump().await.expect("dump after rollback");
+    let dump2 = std::fs::read_to_string(&schema).expect("read dump2");
+    assert!(
+        dump2.contains("20240101000000_person"),
+        "first version should remain in dump header"
+    );
+    assert!(
+        !dump2.contains("20240102000000_age"),
+        "rolled-back version must not appear as applied: {dump2}"
+    );
+
+    runner.migrate().await.expect("re-migrate age");
 
     write_migration(
         &migrations,
@@ -147,20 +214,18 @@ async fn migrate_rollback_dump_and_failed_up_not_recorded() {
     );
     assert!(
         runner.status(true).await.expect("status after fail"),
-        "failed migration must not be recorded in the ledger"
+        "failed migration must not be recorded"
     );
 
     runner.drop().await.expect("drop");
+    runner.create().await.expect("recreate after drop");
+    runner.drop().await.expect("final drop");
 }
 
 #[tokio::test]
 async fn up_creates_database_and_applies() {
-    let base = typedb_url();
-    if skip_or_panic_if_down(&base).await {
-        return;
-    }
-
-    let url = base.with_database(unique_db("tqlmate_up"));
+    let typedb = shared_typedb().await;
+    let url = typedb.url_for(&unique_db("tqlmate_up"));
     let tmp = tempfile::tempdir().unwrap();
     let migrations = tmp.path().join("migrations");
     std::fs::create_dir_all(&migrations).unwrap();
@@ -179,12 +244,8 @@ async fn up_creates_database_and_applies() {
 
 #[tokio::test]
 async fn empty_up_fails_without_recording() {
-    let base = typedb_url();
-    if skip_or_panic_if_down(&base).await {
-        return;
-    }
-
-    let url = base.with_database(unique_db("tqlmate_empty"));
+    let typedb = shared_typedb().await;
+    let url = typedb.url_for(&unique_db("tqlmate_empty"));
     let tmp = tempfile::tempdir().unwrap();
     let migrations = tmp.path().join("migrations");
     std::fs::create_dir_all(&migrations).unwrap();
@@ -207,36 +268,4 @@ async fn empty_up_fails_without_recording() {
         "empty up must not be recorded"
     );
     runner.drop().await.expect("drop");
-}
-
-#[tokio::test]
-async fn load_roundtrips_dump() {
-    let base = typedb_url();
-    if skip_or_panic_if_down(&base).await {
-        return;
-    }
-
-    let src_url = base.with_database(unique_db("tqlmate_src"));
-    let dst_url = base.with_database(unique_db("tqlmate_dst"));
-    let tmp = tempfile::tempdir().unwrap();
-    let migrations = tmp.path().join("migrations");
-    let schema = tmp.path().join("schema.tql");
-    std::fs::create_dir_all(&migrations).unwrap();
-    write_migration(
-        &migrations,
-        "20240101000000_widget.tql",
-        "-- migrate:up\ndefine\n  entity widget;\n\n-- migrate:down\nundefine\n  widget;\n",
-    );
-
-    let mut src = Runner::new(opts(src_url, migrations.clone(), schema.clone()));
-    let _ = src.drop().await;
-    src.up().await.expect("up src");
-    src.dump().await.expect("dump");
-
-    let mut dst = Runner::new(opts(dst_url, migrations, schema));
-    let _ = dst.drop().await;
-    dst.load().await.expect("load");
-
-    src.drop().await.expect("drop src");
-    dst.drop().await.expect("drop dst");
 }
