@@ -1,5 +1,6 @@
 use crate::{Error, Result};
 
+/// Parsed `typedb://user:pass@host:port/database[?tls=…]` connection URL.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeDbUrl {
     pub username: String,
@@ -12,16 +13,10 @@ pub struct TypeDbUrl {
 
 impl TypeDbUrl {
     pub fn parse(raw: &str) -> Result<Self> {
-        let rest = raw
-            .strip_prefix("typedb://")
-            .ok_or_else(|| Error::msg("URL must start with typedb://"))?;
+        let rest = raw.strip_prefix("typedb://").ok_or(Error::UrlScheme)?;
 
-        let (auth, after_auth) = rest
-            .split_once('@')
-            .ok_or_else(|| Error::msg("URL missing user:pass@host"))?;
-        let (username, password) = auth
-            .split_once(':')
-            .ok_or_else(|| Error::msg("URL auth must be user:pass"))?;
+        let (auth, after_auth) = rest.split_once('@').ok_or(Error::UrlAuthHost)?;
+        let (username, password) = auth.split_once(':').ok_or(Error::UrlAuthPair)?;
 
         let (hostport, path_query) = match after_auth.split_once('/') {
             Some((hp, pq)) => (hp, pq),
@@ -34,9 +29,7 @@ impl TypeDbUrl {
 
         let (host, port) = match hostport.rsplit_once(':') {
             Some((h, p)) => {
-                let port: u16 = p
-                    .parse()
-                    .map_err(|_| Error::msg(format!("invalid port: {p}")))?;
+                let port: u16 = p.parse().map_err(|_| Error::UrlPort(p.to_string()))?;
                 (h.to_string(), port)
             }
             None => (hostport.to_string(), 1729),
@@ -44,7 +37,7 @@ impl TypeDbUrl {
 
         let database = path.trim_matches('/').to_string();
         if database.is_empty() {
-            return Err(Error::msg("URL must include /database"));
+            return Err(Error::UrlDatabase);
         }
 
         let mut tls = false;
@@ -56,8 +49,8 @@ impl TypeDbUrl {
         }
 
         Ok(Self {
-            username: decode(username),
-            password: decode(password),
+            username: percent_decode(username),
+            password: percent_decode(password),
             host,
             port,
             database,
@@ -68,9 +61,17 @@ impl TypeDbUrl {
     pub fn address(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }
+
+    /// Clone with a different database name (integration tests use unique DBs).
+    pub fn with_database(&self, database: impl Into<String>) -> Self {
+        Self {
+            database: database.into(),
+            ..self.clone()
+        }
+    }
 }
 
-fn decode(s: &str) -> String {
+fn percent_decode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
@@ -104,32 +105,117 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_full_url() {
-        let u = TypeDbUrl::parse("typedb://admin:secret@db.example:1730/mydb?tls=true").unwrap();
-        assert_eq!(u.username, "admin");
-        assert_eq!(u.password, "secret");
-        assert_eq!(u.host, "db.example");
-        assert_eq!(u.port, 1730);
-        assert_eq!(u.database, "mydb");
-        assert!(u.tls);
+    fn table_driven_parse() {
+        let ok_cases = [
+            (
+                "typedb://admin:secret@db.example:1730/mydb?tls=true",
+                TypeDbUrl {
+                    username: "admin".into(),
+                    password: "secret".into(),
+                    host: "db.example".into(),
+                    port: 1730,
+                    database: "mydb".into(),
+                    tls: true,
+                },
+            ),
+            (
+                "typedb://admin:password@localhost/app",
+                TypeDbUrl {
+                    username: "admin".into(),
+                    password: "password".into(),
+                    host: "localhost".into(),
+                    port: 1729,
+                    database: "app".into(),
+                    tls: false,
+                },
+            ),
+            (
+                "typedb://user:p%40ss@localhost/db",
+                TypeDbUrl {
+                    username: "user".into(),
+                    password: "p@ss".into(),
+                    host: "localhost".into(),
+                    port: 1729,
+                    database: "db".into(),
+                    tls: false,
+                },
+            ),
+            (
+                "typedb://u:p+word@127.0.0.1:1729/x?tls=1",
+                TypeDbUrl {
+                    username: "u".into(),
+                    password: "p word".into(),
+                    host: "127.0.0.1".into(),
+                    port: 1729,
+                    database: "x".into(),
+                    tls: true,
+                },
+            ),
+            (
+                "typedb://u:p@host/db?tls=yes",
+                TypeDbUrl {
+                    username: "u".into(),
+                    password: "p".into(),
+                    host: "host".into(),
+                    port: 1729,
+                    database: "db".into(),
+                    tls: true,
+                },
+            ),
+            (
+                "typedb://u:p@host/db?tls=false",
+                TypeDbUrl {
+                    username: "u".into(),
+                    password: "p".into(),
+                    host: "host".into(),
+                    port: 1729,
+                    database: "db".into(),
+                    tls: false,
+                },
+            ),
+            (
+                "typedb://u:p@host/nested/path",
+                TypeDbUrl {
+                    username: "u".into(),
+                    password: "p".into(),
+                    host: "host".into(),
+                    port: 1729,
+                    database: "nested/path".into(),
+                    tls: false,
+                },
+            ),
+        ];
+        for (raw, expect) in ok_cases {
+            assert_eq!(TypeDbUrl::parse(raw).unwrap(), expect, "parse({raw:?})");
+        }
+
+        let err_cases = [
+            ("http://admin:x@localhost/db", "UrlScheme"),
+            ("typedb://localhost/db", "UrlAuthHost"),
+            ("typedb://admin@localhost/db", "UrlAuthPair"),
+            ("typedb://admin:pass@localhost", "UrlDatabase"),
+            ("typedb://admin:pass@localhost/", "UrlDatabase"),
+            ("typedb://admin:pass@localhost:xyz/db", "UrlPort"),
+        ];
+        for (raw, kind) in err_cases {
+            let err = TypeDbUrl::parse(raw).expect_err(raw);
+            let label = format!("{err:?}");
+            assert!(label.contains(kind), "parse({raw:?}) => {err:?}");
+        }
+    }
+
+    #[test]
+    fn address_uses_host_port() {
+        let u = TypeDbUrl::parse("typedb://a:b@db.example:1730/mydb").unwrap();
         assert_eq!(u.address(), "db.example:1730");
     }
 
     #[test]
-    fn default_port_and_no_tls() {
-        let u = TypeDbUrl::parse("typedb://admin:password@localhost/app").unwrap();
-        assert_eq!(u.port, 1729);
-        assert!(!u.tls);
-    }
-
-    #[test]
-    fn percent_encoded_password() {
-        let u = TypeDbUrl::parse("typedb://user:p%40ss@localhost/db").unwrap();
-        assert_eq!(u.password, "p@ss");
-    }
-
-    #[test]
-    fn rejects_bad_scheme() {
-        assert!(TypeDbUrl::parse("http://admin:x@localhost/db").is_err());
+    fn with_database_preserves_other_fields() {
+        let u = TypeDbUrl::parse("typedb://a:b@h:1/old?tls=true").unwrap();
+        let n = u.with_database("new_db");
+        assert_eq!(n.database, "new_db");
+        assert_eq!(n.host, "h");
+        assert!(n.tls);
     }
 }

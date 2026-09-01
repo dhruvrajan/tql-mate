@@ -1,13 +1,12 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use typedb_driver::{
-    Addresses, Credentials, DriverOptions, DriverTlsConfig, TypeDBDriver,
-};
+use typedb_driver::{Addresses, Credentials, DriverOptions, DriverTlsConfig, TypeDBDriver};
 
-use crate::ledger::{self, schema_queries};
+use crate::ledger::{self, dump_header, schema_queries, strip_dump_header};
 use crate::migration::{
-    self, MigrationStatus, check_strict_order, list_migration_files, new_migration_path, status_rows,
+    self, check_strict_order, list_migration_files, new_migration_path, status_rows,
+    MigrationStatus, Version,
 };
 use crate::url::TypeDbUrl;
 use crate::{Error, Result};
@@ -32,20 +31,22 @@ impl Runner {
         Self { opts, driver: None }
     }
 
-    async fn driver(&mut self) -> Result<&TypeDBDriver> {
+    async fn connect(&mut self) -> Result<&TypeDBDriver> {
         if self.driver.is_none() {
             if let Some(timeout) = self.opts.wait_timeout {
                 wait_for_server(&self.opts.url, timeout, self.opts.verbose).await?;
             }
             self.driver = Some(open_driver(&self.opts.url).await?);
         }
-        Ok(self.driver.as_ref().expect("driver set after connect"))
+        self.driver
+            .as_ref()
+            .ok_or_else(|| Error::msg("internal: driver missing after connect"))
     }
 
     pub async fn create(&mut self) -> Result<()> {
         let name = self.opts.url.database.clone();
         let verbose = self.opts.verbose;
-        let driver = self.driver().await?;
+        let driver = self.connect().await?;
         if driver.databases().contains(name.clone()).await? {
             if verbose {
                 eprintln!("database already exists: {name}");
@@ -60,7 +61,7 @@ impl Runner {
     pub async fn drop(&mut self) -> Result<()> {
         let name = self.opts.url.database.clone();
         let verbose = self.opts.verbose;
-        let driver = self.driver().await?;
+        let driver = self.connect().await?;
         if !driver.databases().contains(name.clone()).await? {
             if verbose {
                 eprintln!("database does not exist: {name}");
@@ -87,11 +88,9 @@ impl Runner {
         let strict = self.opts.strict;
         let verbose = self.opts.verbose;
 
-        let driver = self.driver().await?;
+        let driver = self.connect().await?;
         if !driver.databases().contains(db.clone()).await? {
-            return Err(Error::msg(format!(
-                "database does not exist: {db} (run create or up)"
-            )));
+            return Err(Error::DatabaseMissing(db));
         }
         ledger::ensure(driver, &db).await?;
         let files = list_migration_files(&dir)?;
@@ -111,7 +110,7 @@ impl Runner {
         }
         for m in pending {
             apply_up(driver, &db, &m.version, &m.up, verbose).await?;
-            println!("Applied: {}_{}", m.version, m.name);
+            println!("Applied: {}", m.label());
         }
         Ok(())
     }
@@ -121,7 +120,7 @@ impl Runner {
         let dir = self.opts.migrations_dir.clone();
         let verbose = self.opts.verbose;
 
-        let driver = self.driver().await?;
+        let driver = self.connect().await?;
         ledger::ensure(driver, &db).await?;
         let files = list_migration_files(&dir)?;
         let mut applied = ledger::applied_versions(driver, &db).await?;
@@ -134,19 +133,15 @@ impl Runner {
         let m = files
             .iter()
             .find(|f| f.version == version)
-            .ok_or_else(|| {
-                Error::msg(format!(
-                    "applied version {version} has no matching migration file"
-                ))
-            })?;
+            .ok_or_else(|| Error::MissingMigrationFile(version.clone()))?;
         if m.down.is_empty() {
-            return Err(Error::msg(format!(
-                "migration {}_{} has empty migrate:down",
-                m.version, m.name
-            )));
+            return Err(Error::EmptyDown {
+                version: m.version.clone(),
+                name: m.name.clone(),
+            });
         }
         apply_down(driver, &db, &m.version, &m.down, verbose).await?;
-        println!("Rolled back: {}_{}", m.version, m.name);
+        println!("Rolled back: {}", m.label());
         Ok(())
     }
 
@@ -155,7 +150,7 @@ impl Runner {
         let dir = self.opts.migrations_dir.clone();
         let strict = self.opts.strict;
 
-        let driver = self.driver().await?;
+        let driver = self.connect().await?;
         let applied = if driver.databases().contains(db.clone()).await? {
             ledger::applied_versions(driver, &db)
                 .await
@@ -175,7 +170,7 @@ impl Runner {
                     MigrationStatus::Applied => "[X]",
                     MigrationStatus::Pending => "[ ]",
                 };
-                println!("{mark} {}_{}", m.version, m.name);
+                println!("{mark} {}", m.label());
             }
             if rows.is_empty() {
                 println!("No migrations found.");
@@ -189,7 +184,7 @@ impl Runner {
         let schema_file = self.opts.schema_file.clone();
         let dir = self.opts.migrations_dir.clone();
 
-        let driver = self.driver().await?;
+        let driver = self.connect().await?;
         let db = driver.databases().get(db_name.clone()).await?;
         let schema = db.schema().await?;
         let applied = ledger::applied_versions(driver, &db_name)
@@ -200,18 +195,7 @@ impl Runner {
         if let Some(parent) = schema_file.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let mut out = String::from("-- Schema dumped by tqlmate\n-- Applied migrations:\n");
-        if applied.is_empty() {
-            out.push_str("--   (none)\n");
-        } else {
-            for v in &applied {
-                match files.iter().find(|f| &f.version == v) {
-                    Some(m) => out.push_str(&format!("--   {}_{}\n", m.version, m.name)),
-                    None => out.push_str(&format!("--   {v}\n")),
-                }
-            }
-        }
-        out.push('\n');
+        let mut out = dump_header(&applied, &files);
         out.push_str(schema.trim());
         out.push('\n');
         std::fs::write(&schema_file, out)?;
@@ -225,10 +209,10 @@ impl Runner {
         let text = std::fs::read_to_string(&schema_file)?;
         let body = strip_dump_header(&text);
         if body.trim().is_empty() {
-            return Err(Error::msg("schema file is empty"));
+            return Err(Error::EmptySchema);
         }
 
-        let driver = self.driver().await?;
+        let driver = self.connect().await?;
         if !driver.databases().contains(db.clone()).await? {
             driver.databases().create(db.clone()).await?;
         }
@@ -271,10 +255,10 @@ async fn wait_for_server(url: &TypeDbUrl, timeout: Duration, verbose: bool) -> R
             }
             Err(e) => {
                 if start.elapsed() >= timeout {
-                    return Err(Error::msg(format!(
-                        "timed out waiting for TypeDB at {}: {e}",
-                        url.address()
-                    )));
+                    return Err(Error::WaitTimeout {
+                        address: url.address(),
+                        cause: e.to_string(),
+                    });
                 }
                 if verbose {
                     eprintln!("waiting for TypeDB at {} ({e})", url.address());
@@ -288,12 +272,12 @@ async fn wait_for_server(url: &TypeDbUrl, timeout: Duration, verbose: bool) -> R
 async fn apply_up(
     driver: &TypeDBDriver,
     database: &str,
-    version: &str,
+    version: &Version,
     up: &str,
     verbose: bool,
 ) -> Result<()> {
     if up.trim().is_empty() {
-        return Err(Error::msg(format!("migration {version} has empty migrate:up")));
+        return Err(Error::EmptyUp(version.clone()));
     }
     let applied_at = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string();
     let insert = ledger::record_insert(version, &applied_at);
@@ -306,7 +290,7 @@ async fn apply_up(
 async fn apply_down(
     driver: &TypeDBDriver,
     database: &str,
-    version: &str,
+    version: &Version,
     down: &str,
     verbose: bool,
 ) -> Result<()> {
@@ -315,16 +299,6 @@ async fn apply_down(
         eprintln!("-> down {version}");
     }
     schema_queries(driver, database, &[down, delete.as_str()]).await
-}
-
-fn strip_dump_header(text: &str) -> String {
-    text.lines()
-        .skip_while(|l| {
-            let t = l.trim();
-            t.is_empty() || t.starts_with("--")
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 pub fn resolve_url(cli_url: Option<&str>) -> Result<TypeDbUrl> {
@@ -344,4 +318,23 @@ pub fn default_migrations_dir() -> PathBuf {
 
 pub fn default_schema_file() -> PathBuf {
     PathBuf::from(std::env::var("TQLMATE_SCHEMA_FILE").unwrap_or_else(|_| "db/schema.tql".into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_url_prefers_argument() {
+        let u = resolve_url(Some("typedb://a:b@h:9/argdb")).unwrap();
+        assert_eq!(u.database, "argdb");
+        assert_eq!(u.port, 9);
+    }
+
+    #[test]
+    fn default_paths() {
+        // Unset-sensitive; just ensure they return something non-empty.
+        assert!(!default_migrations_dir().as_os_str().is_empty());
+        assert!(!default_schema_file().as_os_str().is_empty());
+    }
 }

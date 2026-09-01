@@ -22,11 +22,11 @@ async fn server_up(url: &TypeDbUrl) -> bool {
     runner.wait(Duration::from_secs(2)).await.is_ok()
 }
 
-fn opts(url: TypeDbUrl, migrations: PathBuf) -> Opts {
+fn opts(url: TypeDbUrl, migrations: PathBuf, schema: PathBuf) -> Opts {
     Opts {
         url,
         migrations_dir: migrations,
-        schema_file: std::env::temp_dir().join("tqlmate-test-schema.tql"),
+        schema_file: schema,
         strict: false,
         verbose: true,
         wait_timeout: None,
@@ -40,32 +40,52 @@ fn require_typedb() -> bool {
     ) || std::env::var("CI").is_ok()
 }
 
+fn unique_db(prefix: &str) -> String {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_millis();
+    let tid = std::thread::current().id();
+    format!("{prefix}_{millis}_{tid:?}")
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect()
+}
+
+async fn skip_or_panic_if_down(url: &TypeDbUrl) -> bool {
+    if server_up(url).await {
+        return false;
+    }
+    if require_typedb() {
+        panic!(
+            "TypeDB required but not reachable at {} (set TYPEDB_URL)",
+            url.address()
+        );
+    }
+    eprintln!("skip: TypeDB not reachable at {}", url.address());
+    true
+}
+
+fn write_migration(dir: &std::path::Path, filename: &str, body: &str) {
+    std::fs::write(dir.join(filename), body).expect("write migration");
+}
+
 #[tokio::test]
-async fn migrate_rollback_and_failed_up() {
-    let mut url = typedb_url();
-    if !server_up(&url).await {
-        if require_typedb() {
-            panic!(
-                "TypeDB required but not reachable at {} (set TYPEDB_URL)",
-                url.address()
-            );
-        }
-        eprintln!("skip: TypeDB not reachable at {}", url.address());
+async fn migrate_rollback_dump_and_failed_up_not_recorded() {
+    let base = typedb_url();
+    if skip_or_panic_if_down(&base).await {
         return;
     }
 
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
-    url.database = format!("tqlmate_{millis}");
-
+    let url = base.with_database(unique_db("tqlmate_mig"));
     let tmp = tempfile::tempdir().unwrap();
     let migrations = tmp.path().join("migrations");
+    let schema = tmp.path().join("schema.tql");
     std::fs::create_dir_all(&migrations).unwrap();
 
-    std::fs::write(
-        migrations.join("20240101000000_person.tql"),
+    write_migration(
+        &migrations,
+        "20240101000000_person.tql",
         "-- migrate:up\n\
          define\n\
            entity person, owns name;\n\
@@ -76,10 +96,10 @@ async fn migrate_rollback_and_failed_up() {
            owns name from person;\n\
            person;\n\
            name;\n",
-    )
-    .unwrap();
-    std::fs::write(
-        migrations.join("20240102000000_age.tql"),
+    );
+    write_migration(
+        &migrations,
+        "20240102000000_age.tql",
         "-- migrate:up\n\
          define\n\
            entity person, owns age;\n\
@@ -89,31 +109,134 @@ async fn migrate_rollback_and_failed_up() {
          undefine\n\
            owns age from person;\n\
            age;\n",
-    )
-    .unwrap();
+    );
 
-    let mut runner = Runner::new(opts(url, migrations.clone()));
-    runner.drop().await.ok();
+    let mut runner = Runner::new(opts(url, migrations.clone(), schema.clone()));
+    let _ = runner.drop().await;
     runner.create().await.expect("create");
     runner.migrate().await.expect("migrate");
-    assert!(!runner.status(true).await.expect("status"));
+    assert!(
+        !runner.status(true).await.expect("status"),
+        "all migrations should be applied"
+    );
 
     runner.rollback().await.expect("rollback");
-    assert!(runner.status(true).await.expect("status after rollback"));
+    assert!(
+        runner.status(true).await.expect("status after rollback"),
+        "one migration should be pending after rollback"
+    );
 
     runner.dump().await.expect("dump");
+    let dump = std::fs::read_to_string(&schema).expect("read dump");
+    assert!(
+        dump.contains("-- Schema dumped by tqlmate"),
+        "dump should include header"
+    );
+    assert!(dump.contains("define"), "dump should include schema body");
+
     runner.migrate().await.expect("re-migrate");
 
-    std::fs::write(
-        migrations.join("20240103000000_bad.tql"),
+    write_migration(
+        &migrations,
+        "20240103000000_bad.tql",
         "-- migrate:up\ndefine\n  this is not valid typeql !!!\n\n-- migrate:down\n\n",
-    )
-    .unwrap();
-    assert!(runner.migrate().await.is_err());
+    );
+    assert!(
+        runner.migrate().await.is_err(),
+        "invalid TypeQL must fail the SCHEMA transaction"
+    );
     assert!(
         runner.status(true).await.expect("status after fail"),
-        "failed migration must not be recorded"
+        "failed migration must not be recorded in the ledger"
     );
 
     runner.drop().await.expect("drop");
+}
+
+#[tokio::test]
+async fn up_creates_database_and_applies() {
+    let base = typedb_url();
+    if skip_or_panic_if_down(&base).await {
+        return;
+    }
+
+    let url = base.with_database(unique_db("tqlmate_up"));
+    let tmp = tempfile::tempdir().unwrap();
+    let migrations = tmp.path().join("migrations");
+    std::fs::create_dir_all(&migrations).unwrap();
+    write_migration(
+        &migrations,
+        "20240101000000_thing.tql",
+        "-- migrate:up\ndefine\n  entity thing;\n\n-- migrate:down\nundefine\n  thing;\n",
+    );
+
+    let mut runner = Runner::new(opts(url, migrations, tmp.path().join("schema.tql")));
+    let _ = runner.drop().await;
+    runner.up().await.expect("up");
+    assert!(!runner.status(true).await.expect("status"));
+    runner.drop().await.expect("drop");
+}
+
+#[tokio::test]
+async fn empty_up_fails_without_recording() {
+    let base = typedb_url();
+    if skip_or_panic_if_down(&base).await {
+        return;
+    }
+
+    let url = base.with_database(unique_db("tqlmate_empty"));
+    let tmp = tempfile::tempdir().unwrap();
+    let migrations = tmp.path().join("migrations");
+    std::fs::create_dir_all(&migrations).unwrap();
+    write_migration(
+        &migrations,
+        "20240101000000_empty.tql",
+        "-- migrate:up\n\n\n-- migrate:down\n\n",
+    );
+
+    let mut runner = Runner::new(opts(url, migrations, tmp.path().join("schema.tql")));
+    let _ = runner.drop().await;
+    runner.create().await.expect("create");
+    let err = runner.migrate().await.expect_err("empty up should fail");
+    assert!(
+        err.to_string().contains("empty migrate:up"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        runner.status(true).await.expect("status"),
+        "empty up must not be recorded"
+    );
+    runner.drop().await.expect("drop");
+}
+
+#[tokio::test]
+async fn load_roundtrips_dump() {
+    let base = typedb_url();
+    if skip_or_panic_if_down(&base).await {
+        return;
+    }
+
+    let src_url = base.with_database(unique_db("tqlmate_src"));
+    let dst_url = base.with_database(unique_db("tqlmate_dst"));
+    let tmp = tempfile::tempdir().unwrap();
+    let migrations = tmp.path().join("migrations");
+    let schema = tmp.path().join("schema.tql");
+    std::fs::create_dir_all(&migrations).unwrap();
+    write_migration(
+        &migrations,
+        "20240101000000_widget.tql",
+        "-- migrate:up\ndefine\n  entity widget;\n\n-- migrate:down\nundefine\n  widget;\n",
+    );
+
+    let mut src = Runner::new(opts(src_url, migrations.clone(), schema.clone()));
+    let _ = src.drop().await;
+    src.up().await.expect("up src");
+    src.dump().await.expect("dump");
+
+    let mut dst = Runner::new(opts(dst_url, migrations, schema));
+    let _ = dst.drop().await;
+    dst.load().await.expect("load");
+
+    src.drop().await.expect("drop src");
+    dst.drop().await.expect("drop dst");
 }
