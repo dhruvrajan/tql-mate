@@ -85,4 +85,4 @@ Each up/down runs in one **SCHEMA** transaction together with the ledger write (
   These must not open TypeDB or Docker.
 - **Integration** (`tests/typedb_docker.rs` only, feature `typedb-docker`, on by default): TypeDB via [testcontainers](https://testcontainers.com/) (`typedb/typedb:3.12.3`). Requires Docker; fails loudly if unavailable (no silent skip).
 - CI (`.github/workflows/ci.yml`, GitHub-hosted runners): jobs `unit` → `integration`, plus parallel `lint` (rustfmt/clippy) and `package` (`cargo publish --dry-run`).
-- Release: pushing a `v*` tag runs `.github/workflows/release.yml`, which publishes to crates.io using the `CARGO_REGISTRY_TOKEN` secret.
+- Release: pushing a `v*` tag runs `.github/workflows/release.yml` — unit tests, then cross-platform binaries, then a GitHub Release with those archives attached and a `cargo publish` to crates.io (`CARGO_REGISTRY_TOKEN` secret). Releases are cut from GitHub only, never from a laptop.
