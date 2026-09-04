@@ -5,8 +5,8 @@ edition = "2021"
 description = "dbmate-style migration CLI for TypeDB 3.x"
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/dhruvrajan/tql-mate"
-homepage = "https://github.com/dhruvrajan/tql-mate"
+repository = "https://github.com/dhruvrajan/tqlmate"
+homepage = "https://github.com/dhruvrajan/tqlmate"
 keywords = ["typedb", "migration", "typeql", "database", "cli"]
 categories = ["command-line-utilities", "database"]
 exclude = [".github/", ".env.example"]
@@ -33,4 +33,4 @@ typedb-driver = "3.12.3"
 
 [dev-dependencies]
 tempfile = "3"
-testcontainers = "0.23"
+testcontainers = "0.28"
